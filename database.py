@@ -25,6 +25,15 @@ def init_db():
         """
     )
 
+    cursor.execute(
+    """
+    CREATE TABLE IF NOT EXISTS settings (
+        id INTEGER PRIMARY KEY,
+        monthly_budget REAL NOT NULL DEFAULT 0
+    )
+    """
+    )
+
     conn.commit()
     conn.close()
 
@@ -51,7 +60,10 @@ def get_expenses_period(days: int):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    if days == 1:
+        cutoff = datetime.now().strftime("%Y-%m-%d 00:00:00")
+    else:
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
     cursor.execute(
         """
@@ -85,9 +97,27 @@ def get_month_summary():
     )
 
     count, total = cursor.fetchone()
+
+    cursor.execute(
+        """
+        SELECT monthly_budget
+        FROM settings
+        WHERE id = 1
+        """
+    )
+
+    row = cursor.fetchone()
+
+    if row is None:
+        budget = 0
+    else:
+        budget = row[0]
+
     conn.close()
 
-    return count, total
+    remaining = budget - total
+
+    return count, total, budget, remaining
 
 def delete_last_expense(user_id: int):
     conn = get_connection()
@@ -125,4 +155,40 @@ def delete_last_expense(user_id: int):
 
     return True
 
+
+def set_monthly_budget(amount: float):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO settings (id, monthly_budget)
+        VALUES (1, ?)
+        """,
+        (amount,)
+    )
+
+    conn.commit()
+    conn.close()
+
+def get_monthly_budget():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT monthly_budget
+        FROM settings
+        WHERE id = 1
+        """
+    )
+
+    row = cursor.fetchone()
+
+    conn.close()
+
+    if row is None:
+        return 0
+
+    return row[0]
 

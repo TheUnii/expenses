@@ -8,7 +8,7 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import FSInputFile, KeyboardButton, Message, CallbackQuery, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import database as db
@@ -47,11 +47,15 @@ class AddExpense(StatesGroup):
     waiting_for_category = State()
     waiting_for_custom_category = State()
     waiting_for_amount = State()
+    waiting_for_monthly_budget = State()
+
+menu_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Меню")]], resize_keyboard=True)
 
 def main_menu_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Добавить трату", callback_data="add_expense")
     builder.button(text="📊 История трат", callback_data="history")
+    builder.button(text="Настройки", callback_data="settings")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -70,7 +74,15 @@ def history_period_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="За день", callback_data="hist:1")
     builder.button(text="За неделю", callback_data="hist:7")
+    builder.button(text="📅 Итог за месяц", callback_data="month_total")
+    builder.button(text="⬅️ В меню", callback_data="back_main")
+    builder.adjust(2)
+    return builder.as_markup()
+
+def sett_kb():
+    builder = InlineKeyboardBuilder()
     builder.button(text="🗑 Удалить последнюю трату", callback_data="del")
+    builder.button(text="Изменить сумму за месяц", callback_data="edit_monthly")
     builder.button(text="⬅️ В меню", callback_data="back_main")
     builder.adjust(2)
     return builder.as_markup()
@@ -87,9 +99,22 @@ async def cmd_start(message: Message, state: FSMContext):
 
     await message.answer(
         "Привет! Я бот для учёта общего бюджета.",
+        reply_markup=menu_kb
+    )
+
+    await message.answer(
+        "Меню:", 
         reply_markup=main_menu_kb()
     )
 
+@router.message(F.text == "Меню")
+async def menu(message: Message, state: FSMContext):
+    await state.clear()
+
+    await message.answer(
+        "Меню:",
+        reply_markup=main_menu_kb()
+    )
 
 @router.callback_query(F.data == "back_main")
 async def back_to_main(callback: CallbackQuery, state: FSMContext):
@@ -97,18 +122,73 @@ async def back_to_main(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Главное меню:", reply_markup=main_menu_kb())
     await callback.answer()
 
+@router.callback_query(F.data == "month_total")
+async def month_total(callback: CallbackQuery):
+
+    count, total, budget, remaining = db.get_month_summary()
+
+    text = (
+        f"📅 Итог за текущий месяц:\n\n"
+        f"💰 Бюджет: {budget:.2f} ₽\n"
+        f"📊 Потрачено: {total:.2f} ₽\n"
+        f"💵 Осталось: {remaining:.2f} ₽"
+    )
+
+    photo1 = FSInputFile("img/1.jpg")
+    photo2 = FSInputFile("img/2.jpg")
+    photo3 = FSInputFile("img/3.jpg")
+    photo4 = FSInputFile("img/4.jpg")
+
+    if budget * 0.75 <= remaining <= budget:
+        await callback.message.answer_photo(
+            photo=photo1,
+            caption=text,
+            reply_markup=main_menu_kb()
+        )
+
+    elif budget * 0.4 <= remaining < budget * 0.75:
+        await callback.message.answer_photo(
+            photo=photo2,
+            caption=text,
+            reply_markup=main_menu_kb()
+        )
+
+    elif budget * 0.06 <= remaining < budget * 0.4:
+        await callback.message.answer_photo(
+            photo=photo3,
+            caption=text,
+            reply_markup=main_menu_kb()
+        )
+
+    else:
+        await callback.message.answer_photo(
+            photo=photo4,
+            caption=text,
+            reply_markup=main_menu_kb()
+        )
+
+    await callback.answer()
+
+@router.callback_query(F.data == "settings")
+async def settings(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "⚙️ Настройки",
+        reply_markup=sett_kb()
+    )
+
+    await callback.answer()
 
 @router.callback_query(F.data == "cancel")
 async def cancel_action(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("Отменено.", reply_markup=main_menu_kb())
+    await callback.message.answer("Отменено.", reply_markup=main_menu_kb())
     await callback.answer()
 
 
 @router.callback_query(F.data == "add_expense")
 async def add_expense_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AddExpense.waiting_for_category)
-    await callback.message.edit_text(
+    await callback.message.answer(
         "Выберите категорию траты или введите свою:",
         reply_markup=categories_kb(),
     )
@@ -166,31 +246,72 @@ async def amount_entered(message: Message, state: FSMContext, bot: Bot):
     db.add_expense(user_id=user.id, username=username, category=category, amount=amount)
     await state.clear()
 
-    count, total = db.get_month_summary()
+    count, total, budget, remaining = db.get_month_summary()
 
     user_id = message.from_user.id
 
-    if user_id == ALLOWED_USER2 and amount > 1500:
-        await message.answer("Сообщение от Вани:")
-        await message.answer_sticker(sticker="CAACAgQAAxkBAAER4ERqodHZiVJbAhGXzYcIf2w7SHglxQACSxMAAuJz0VBRcPV9Q2figD0E")
-        await bot.send_animation(chat_id=ALLOWED_USER1, animation="CgACAgIAAxkBAAMwaqHUZDpzW0bRCx0lmw10FZVU6v4AAnCqAALmHRBJEI32aDhoe_I9BA")
-        text = f"Саша потратила {amount:.0f} рублей"
-        await bot.send_message(chat_id=ALLOWED_USER1, text=text)
+    if user_id == ALLOWED_USER2:
+        if amount > 1500:
+            await message.answer("Сообщение от Вани:")
+            await message.answer_sticker(sticker="CAACAgQAAxkBAAER4ERqodHZiVJbAhGXzYcIf2w7SHglxQACSxMAAuJz0VBRcPV9Q2figD0E")
+            text = f"Саша потратила {amount:.0f} рублей на {category}"
+            await bot.send_message(chat_id=ALLOWED_USER1, text=text)
+        else:
+            text = f"Саша потратила {amount:.0f} рублей на {category}"
+            await bot.send_message(chat_id=ALLOWED_USER1, text=text)
+    else:
+        text = f"Ваня потратил {amount:.0f} рублей на {category}"
+        await bot.send_message(chat_id=ALLOWED_USER2, text=text)
+
 
     await message.answer(
         "✅ Трата сохранена!\n"
         f"Категория: {category}\n"
         f"Сумма: {amount:.2f} ₽\n\n"
-        f"📅 Итог за текущий месяц: {total:.2f}\n",
+        f"📊 Потрачено за месяц: {total:.2f} ₽\n"
+        f"💰 Осталось: {remaining:.2f} ₽",
         reply_markup=main_menu_kb(),
     )
 
+@router.callback_query(F.data == "edit_monthly")
+async def edit_monthly(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AddExpense.waiting_for_monthly_budget)
 
+    await callback.message.answer(
+        "💰 Введите бюджет на месяц:"
+    )
+
+    await callback.answer()
+
+@router.message(AddExpense.waiting_for_monthly_budget)
+async def monthly_budget_entered(message: Message, state: FSMContext):
+    raw = message.text.strip().replace(",", ".")
+
+    try:
+        amount = float(raw)
+
+        if amount <= 0:
+            raise ValueError
+
+    except ValueError:
+        await message.answer(
+            "⚠️ Введите корректную положительную сумму."
+        )
+        return
+
+    db.set_monthly_budget(amount)
+
+    await state.clear()
+
+    await message.answer(
+        f"✅ Бюджет на месяц установлен: {amount:.2f} ₽",
+        reply_markup=main_menu_kb()
+    )
 
 @router.callback_query(F.data == "history")
 async def history_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text(
+    await callback.message.answer(
         "За какой период показать историю?",
         reply_markup=history_period_kb(),
     )
@@ -228,11 +349,13 @@ async def delete_last_expense(callback: CallbackQuery):
     deleted = db.delete_last_expense(user_id)
 
     if deleted:
-        await callback.message.answer("🗑 Последняя трата удалена.", reply_markup=main_menu_kb())
+        await callback.message.edit_text("🗑 Последняя трата удалена.", reply_markup=main_menu_kb())
     else:
-        await callback.message.answer("У вас нет трат.", reply_markup=main_menu_kb())
+        await callback.message.edit_text("У вас нет трат.", reply_markup=main_menu_kb())
 
     await callback.answer()
+
+
 
 async def main():
     db.init_db()
